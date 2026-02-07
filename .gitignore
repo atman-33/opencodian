@@ -43,3 +43,6 @@ opencodian-debug.json
 
 # release temp files
 release-temp
+
+# Serena MCP
+.serena/

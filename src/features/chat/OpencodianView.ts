@@ -675,9 +675,24 @@ export class OpencodianView extends ItemView {
     workingEl.textContent = "Working on it...";
     itemsEl.appendChild(workingEl);
 
+    const slowNotices = {
+      first: window.setTimeout(() => {
+        if (!workingEl.parentElement) return;
+        workingEl.textContent =
+          "Still working... This might be due to rate limiting.";
+      }, 15000),
+      second: window.setTimeout(() => {
+        if (!workingEl.parentElement) return;
+        workingEl.textContent =
+          "No response yet. If this persists, consider retrying.";
+      }, 30000),
+    };
+
     this.scrollToBottom();
 
     const clearWorking = () => {
+      window.clearTimeout(slowNotices.first);
+      window.clearTimeout(slowNotices.second);
       if (workingEl.parentElement) workingEl.remove();
     };
 

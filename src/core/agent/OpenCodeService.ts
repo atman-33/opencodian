@@ -958,6 +958,11 @@ export class OpenCodeService {
         promptStatus = 204;
       } catch (error) {
         promptError = error instanceof Error ? error.message : String(error);
+        if (this.abortController && !this.abortController.signal.aborted) {
+          const reason =
+            error instanceof Error ? error : new Error(promptError || "Unknown error");
+          this.abortController.abort(reason);
+        }
         throw error;
       }
     })();
@@ -1240,7 +1245,10 @@ export class OpenCodeService {
         const msg = String(error);
         const errMsg = error instanceof Error ? error.message : msg;
         
-        if (msg.includes("ECONNREFUSED") || msg.includes("ENOTFOUND")) {
+        const msgLower = msg.toLowerCase();
+        if (msgLower.includes("rate limit") || msgLower.includes("429")) {
+          finalError = new ServerError(429, "Rate limit exceeded. Please try again later.");
+        } else if (msg.includes("ECONNREFUSED") || msg.includes("ENOTFOUND")) {
           finalError = new NetworkError(new Error("Cannot connect to OpenCode server"));
         } else if (msg.includes("ETIMEDOUT") || msg.includes("timeout")) {
           finalError = new NetworkError(new Error("Connection timed out"));
