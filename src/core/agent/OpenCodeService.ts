@@ -201,21 +201,18 @@ export class OpenCodeService {
    * Create a client with Node.js http module to bypass CORS consistently
    */
   private createClient(baseUrl: string, directory?: string | null): OpencodeClient {
-    // Ensure baseUrl doesn't have trailing slash
     const normalizedBaseUrl = baseUrl.replace(/\/$/, "");
 
     return createOpencodeClient({
       baseUrl: normalizedBaseUrl,
       directory: directory ?? undefined,
       fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
-        // Handle different input types
         let url: string;
         let method: string;
         let headers: Record<string, string>;
         let body: string | undefined;
 
         if (input instanceof Request) {
-          // Input is a Request object
           url = input.url;
           method = input.method;
           headers = {};
@@ -237,14 +234,17 @@ export class OpenCodeService {
           body = init?.body as string | undefined;
         }
 
-        console.log(`[OpenCodeService] HTTP ${method} ${url}`);
+        if (url.startsWith("/")) {
+          url = normalizedBaseUrl + url;
+        }
+
+        console.log(`[OpenCodeService] Request: ${method} ${url}`);
 
         return new Promise<Response>((resolve, reject) => {
           const urlObj = new URL(url);
           const requestHeaders: Record<string, string> = { ...headers };
-
-          if (body && !requestHeaders["content-length"]) {
-            requestHeaders["content-length"] = Buffer.byteLength(body).toString();
+          if (body) {
+            requestHeaders["Content-Length"] = Buffer.byteLength(body).toString();
           }
 
           const req = http.request(
@@ -269,33 +269,10 @@ export class OpenCodeService {
                   statusText: res.statusMessage || "",
                   headers: res.headers as HeadersInit,
                 });
+
                 resolve(response);
               });
             },
-          );
-
-          req.on("timeout", () => {
-            req.destroy();
-            reject(new Error(`Request timed out: ${method} ${url}`));
-          });
-
-          req.on("error", (err) => {
-            console.error(`[OpenCodeService] Request failed:`, err);
-            reject(err);
-          });
-
-          if (body) {
-            req.write(body);
-          }
-          req.end();
-        });
-      },
-    });
-  }
-
-                resolve(response);
-              });
-            }
           );
 
           req.on("timeout", () => {
