@@ -4,6 +4,7 @@
  * Registers the sidebar chat view, settings tab, and commands.
  */
 
+import { existsSync } from "fs";
 import { Plugin } from "obsidian";
 
 import { OpenCodeService } from "./core/agent";
@@ -49,8 +50,7 @@ export default class OpencodianPlugin extends Plugin {
       if (platform === "win32" && !path.match(/\.(exe|cmd|bat|ps1)$/i)) {
         // Try adding .cmd extension
         const fixedPath = path + ".cmd";
-        const fs = require("fs");
-        if (fs.existsSync(fixedPath)) {
+        if (existsSync(fixedPath)) {
           console.log(`[Opencodian] Fixed path: ${path} -> ${fixedPath}`);
           path = fixedPath;
           this.settings.opencodePath = path;
