@@ -104,7 +104,7 @@ export class OpenCodeService {
   private serverUrl: string = "http://127.0.0.1:4097";
   private serverClose: (() => void) | null = null;
   private initPromise: Promise<void> | null = null;
-  
+
   // Debug logging
   private app: App | null = null;
   private debugEnabled: boolean = true;
@@ -197,7 +197,6 @@ export class OpenCodeService {
     }
   }
 
-
   /**
    * Create a client with Node.js http module to bypass CORS consistently
    */
@@ -232,43 +231,31 @@ export class OpenCodeService {
             }
           }
         } else {
-          // Input is URL or string
           url = input.toString();
           method = init?.method || "GET";
           headers = (init?.headers as Record<string, string>) || {};
           body = init?.body as string | undefined;
         }
 
-        // Ensure URL is absolute
-        if (url.startsWith("/")) {
-          url = normalizedBaseUrl + url;
-        }
+        console.log(`[OpenCodeService] HTTP ${method} ${url}`);
 
-        // Simple log for everyday use
-        console.log(`[OpenCodeService] Request: ${method} ${url}`);
-
-        // Use Node.js http.request to bypass CORS and avoid requestUrl limitations
         return new Promise<Response>((resolve, reject) => {
           const urlObj = new URL(url);
-
-          // Explicitly set Content-Length to prevent hanging requests
           const requestHeaders: Record<string, string> = { ...headers };
-          if (body) {
-            requestHeaders["Content-Length"] =
-              Buffer.byteLength(body).toString();
+
+          if (body && !requestHeaders["content-length"]) {
+            requestHeaders["content-length"] = Buffer.byteLength(body).toString();
           }
 
           const req = http.request(
             urlObj,
             {
               method,
-            headers: requestHeaders,
-            timeout: 10000, // 10s timeout
-          },
+              headers: requestHeaders,
+              timeout: 10000,
+            },
             (res) => {
-              console.log(
-                `[OpenCodeService] Response received: ${res.statusCode}`
-              );
+              console.log(`[OpenCodeService] Response received: ${res.statusCode}`);
               const chunks: Buffer[] = [];
               res.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
               res.on("end", () => {
@@ -277,12 +264,34 @@ export class OpenCodeService {
                 const status = res.statusCode || 200;
                 const nullBody = status === 204 || status === 205 || status === 304;
 
-                // Construct a standard Response object
                 const response = new Response(nullBody ? null : responseText, {
                   status,
                   statusText: res.statusMessage || "",
-                  headers: res.headers as any,
+                  headers: res.headers as HeadersInit,
                 });
+                resolve(response);
+              });
+            },
+          );
+
+          req.on("timeout", () => {
+            req.destroy();
+            reject(new Error(`Request timed out: ${method} ${url}`));
+          });
+
+          req.on("error", (err) => {
+            console.error(`[OpenCodeService] Request failed:`, err);
+            reject(err);
+          });
+
+          if (body) {
+            req.write(body);
+          }
+          req.end();
+        });
+      },
+    });
+  }
 
                 resolve(response);
               });
@@ -1526,6 +1535,7 @@ export class OpenCodeService {
 
     return new Promise<ConfigProvidersResponse>((resolve, reject) => {
       const urlObj = new URL(`${this.serverUrl}/config/providers`);
+      console.log(`[OpenCodeService] Fetching providers from: ${urlObj.toString()}`);
 
       const req = http.request(
         urlObj,
@@ -1542,6 +1552,7 @@ export class OpenCodeService {
           res.on("end", () => {
             const buffer = Buffer.concat(chunks);
             const responseText = buffer.toString("utf-8");
+            console.log(`[OpenCodeService] Providers response (${res.statusCode}):`, responseText);
 
             if (res.statusCode && res.statusCode >= 400) {
               reject(new Error(`Failed to fetch providers: ${res.statusCode}`));
@@ -1550,6 +1561,7 @@ export class OpenCodeService {
 
             try {
               const data = JSON.parse(responseText) as ConfigProvidersResponse;
+              console.log(`[OpenCodeService] Parsed providers:`, JSON.stringify(data, null, 2));
               resolve(data);
             } catch {
               reject(new Error("Failed to parse provider response"));
