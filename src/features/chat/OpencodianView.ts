@@ -1836,6 +1836,7 @@ export class OpencodianView extends ItemView {
         this,
       );
       this.enrichCodeBlocks(container);
+      this.enrichInternalLinks(container);
     } catch {
       // Fallback to plain text
       container.removeClass("opencodian-markdown");
@@ -1877,6 +1878,28 @@ export class OpencodianView extends ItemView {
         }, 2000);
 
         new Notice("Code copied to clipboard");
+      });
+    }
+  }
+
+  private enrichInternalLinks(container: HTMLElement): void {
+    const internalLinks = container.querySelectorAll("a.internal-link");
+    for (const linkEl of Array.from(internalLinks)) {
+      const href = linkEl.getAttribute("data-href");
+      if (!href) continue;
+
+      linkEl.addEventListener("click", (e: MouseEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        this.plugin.app.workspace.openLinkText(href, "", e.ctrlKey || e.metaKey);
+      });
+
+      linkEl.addEventListener("auxclick", (e: MouseEvent) => {
+        if (e.button === 1) {
+          e.preventDefault();
+          e.stopPropagation();
+          this.plugin.app.workspace.openLinkText(href, "", true);
+        }
       });
     }
   }
