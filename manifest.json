@@ -1,7 +1,7 @@
 {
 	"id": "opencodian",
 	"name": "Opencodian",
-	"version": "0.1.1",
+	"version": "0.1.2",
 	"minAppVersion": "1.0.0",
 	"description": "Embed OpenCode AI as a sidebar chat with full agentic capabilities for file operations and bash commands.",
 	"author": "Your Name",
