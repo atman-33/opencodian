@@ -95,6 +95,21 @@ export interface ProviderWithModels {
   defaultModelId?: string;
 }
 
+export interface ProviderProcessingSummary {
+  providerId: string;
+  providerName: string;
+  rawModelCount: number;
+  processedModelCount: number;
+  filteredOutModelIds: string[];
+  rawModelIds: string[];
+  processedModelIds: string[];
+}
+
+export interface ProcessProvidersResult {
+  providers: ProviderWithModels[];
+  summaries: ProviderProcessingSummary[];
+}
+
 /** Popular providers (shown first in list) */
 export const POPULAR_PROVIDERS = [
   "opencode",
@@ -160,13 +175,21 @@ export function toModelOption(model: ProviderModel): ModelOption {
 /** Process config providers response to UI-friendly format */
 export function processProviders(
   response: ConfigProvidersResponse
-): ProviderWithModels[] {
-  const result: ProviderWithModels[] = [];
+): ProcessProvidersResult {
+  const providers: ProviderWithModels[] = [];
+  const summaries: ProviderProcessingSummary[] = [];
 
   for (const provider of response.providers) {
-    const models = Object.values(provider.models)
-      .filter((m) => !(provider.id === "opencode" && m.id.includes("gpt-5-nano")))
-      .map(toModelOption);
+    const rawModels = Object.values(provider.models);
+    const visibleModels = rawModels.filter(
+      (m) => !(provider.id === "opencode" && m.id.includes("gpt-5-nano"))
+    );
+    const models = visibleModels.map(toModelOption);
+    const rawModelIds = rawModels.map((m) => `${m.providerID}/${m.id}`);
+    const processedModelIds = models.map((m) => m.id);
+    const filteredOutModelIds = rawModelIds.filter(
+      (id) => !processedModelIds.includes(id)
+    );
 
     // Sort models: Free first, then active/other, then by name
     models.sort((a, b) => {
@@ -177,17 +200,27 @@ export function processProviders(
       return a.label.localeCompare(b.label);
     });
 
-    result.push({
+    providers.push({
       id: provider.id,
       name: provider.name,
       isConnected: true, // All providers from /config/providers are connected
       models,
       defaultModelId: response.default[provider.id],
     });
+
+    summaries.push({
+      providerId: provider.id,
+      providerName: provider.name,
+      rawModelCount: rawModels.length,
+      processedModelCount: models.length,
+      filteredOutModelIds,
+      rawModelIds,
+      processedModelIds,
+    });
   }
 
   // Sort providers: popular first, then alphabetically
-  result.sort((a, b) => {
+  providers.sort((a, b) => {
     const aPopular = POPULAR_PROVIDERS.indexOf(a.id);
     const bPopular = POPULAR_PROVIDERS.indexOf(b.id);
     if (aPopular !== -1 && bPopular !== -1) {
@@ -199,5 +232,8 @@ export function processProviders(
     return a.name.localeCompare(b.name);
   });
 
-  return result;
+  return {
+    providers,
+    summaries,
+  };
 }
