@@ -167,7 +167,7 @@ export class OpencodianView extends ItemView {
         contenteditable: "true",
         role: "textbox",
         "aria-multiline": "true",
-        "data-placeholder": "@ files, folders, skills",
+        "data-placeholder": "@ files & folders, / commands & skills",
         "data-empty": "true",
       },
     });

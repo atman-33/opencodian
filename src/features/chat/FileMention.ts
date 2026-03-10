@@ -18,9 +18,21 @@ export interface MentionItem {
   isFolder: boolean;
 }
 
+interface SlashSuggestionItem {
+  label: string;
+  value: string;
+  source: "claude-skill" | "opencode-command" | "opencode-skill";
+  detail: string;
+  insertText?: string;
+  skillItem?: SkillItem;
+}
+
 type UnifiedMentionItem =
   | { type: "file"; item: MentionItem }
-  | { type: "skill"; item: SkillItem };
+  | { type: "skill"; item: SkillItem }
+  | { type: "slash"; item: SlashSuggestionItem };
+
+type SuggestionTriggerType = "mention" | "slash";
 
 export class FileMention {
   private app: App;
@@ -34,11 +46,13 @@ export class FileMention {
 
   private fileItems: MentionItem[] = [];
   private skillItems: SkillItem[] = [];
+  private slashItems: SlashSuggestionItem[] = [];
   private filteredItems: UnifiedMentionItem[] = [];
   private selectedIndex: number = 0;
   private mentionRange: Range | null = null;
   private isOpen: boolean = false;
   private mentionQueryId: number = 0;
+  private activeTriggerType: SuggestionTriggerType | null = null;
 
   private mentions: MentionItem[] = [];
   private skillMentions: SkillItem[] = [];
@@ -111,6 +125,7 @@ export class FileMention {
 
     this.fileItems = items;
     this.skillItems = await this.loadSkillItems();
+    this.slashItems = await this.loadSlashItems();
   }
 
   private isHiddenPath(path: string): boolean {
@@ -138,6 +153,31 @@ export class FileMention {
 
     skills.sort((a, b) => a.name.localeCompare(b.name));
     return skills;
+  }
+
+  private async loadSlashItems(): Promise<SlashSuggestionItem[]> {
+    const [claudeSkills, opencodeCommands, opencodeSkills] = await Promise.all([
+      this.readSlashSkillFolders(".claude/skills", "claude-skill"),
+      this.readSlashCommands(),
+      this.readSlashSkillFolders(".opencode/skills", "opencode-skill"),
+    ]);
+
+    const items = [
+      ...claudeSkills,
+      ...opencodeCommands,
+      ...opencodeSkills,
+    ];
+    const unique = new Map<string, SlashSuggestionItem>();
+
+    for (const item of items) {
+      if (!unique.has(item.value)) {
+        unique.set(item.value, item);
+      }
+    }
+
+    return Array.from(unique.values()).sort((a, b) =>
+      a.value.localeCompare(b.value),
+    );
   }
 
   private getGlobalSkillsDir(): string | null {
@@ -193,6 +233,91 @@ export class FileMention {
       return typeof content === "string" ? content : null;
     } catch {
       return null;
+    }
+  }
+
+  private getVaultAdapter(): {
+    exists(path: string): Promise<boolean>;
+    list(path: string): Promise<{ files: string[]; folders: string[] }>;
+  } {
+    return this.app.vault.adapter as {
+      exists(path: string): Promise<boolean>;
+      list(path: string): Promise<{ files: string[]; folders: string[] }>;
+    };
+  }
+
+  private getSlashSourceLabel(source: SlashSuggestionItem["source"]): string {
+    switch (source) {
+      case "claude-skill":
+        return ".claude/skills";
+      case "opencode-command":
+        return ".opencode/command";
+      case "opencode-skill":
+        return ".opencode/skills";
+    }
+  }
+
+  private async readSlashSkillFolders(
+    dir: string,
+    source: SlashSuggestionItem["source"],
+  ): Promise<SlashSuggestionItem[]> {
+    const adapter = this.getVaultAdapter();
+
+    try {
+      if (!(await adapter.exists(dir))) {
+        return [];
+      }
+
+      const listing = await adapter.list(dir);
+      return listing.folders
+        .map((folder) => folder.split("/").pop() || folder)
+        .filter((name) => name.length > 0 && !name.startsWith("."))
+        .map((name) => ({
+          label: `/${name}`,
+          value: `/${name}`,
+          source,
+          detail: this.getSlashSourceLabel(source),
+          skillItem: {
+            name,
+            description: "",
+            path: `${dir}/${name}/SKILL.md`,
+            scope: source === "claude-skill" ? "project" : "global",
+          },
+        }));
+    } catch {
+      return [];
+    }
+  }
+
+  private async readSlashCommands(): Promise<SlashSuggestionItem[]> {
+    const dir = ".opencode/command";
+    const adapter = this.getVaultAdapter();
+
+    try {
+      if (!(await adapter.exists(dir))) {
+        return [];
+      }
+
+      const listing = await adapter.list(dir);
+      return listing.files
+        .filter((file) => file.endsWith(".md"))
+        .filter((file) => {
+          const name = file.split("/").pop() || file;
+          return !name.startsWith(".");
+        })
+        .map((file) => {
+          const name = (file.split("/").pop() || file).replace(/\.md$/i, "");
+          return {
+          label: `/${name}`,
+          value: `/${name}`,
+          source: "opencode-command" as const,
+          detail: this.getSlashSourceLabel("opencode-command"),
+          insertText: `Follow instructions in ${file}. `,
+        };
+        })
+        .filter((item) => item.value.length > 1);
+    } catch {
+      return [];
     }
   }
 
@@ -417,14 +542,18 @@ export class FileMention {
   }
 
   /** Find the @query trigger right before cursor */
-  private findMentionTrigger(beforeCursor: string): { query: string } | null {
-    let atIndex = -1;
+  private findMentionTrigger(
+    beforeCursor: string,
+  ): { query: string; type: SuggestionTriggerType } | null {
+    let triggerIndex = -1;
+    let triggerType: SuggestionTriggerType | null = null;
 
     for (let i = beforeCursor.length - 1; i >= 0; i--) {
       const ch = beforeCursor[i];
-      if (ch === "@") {
+      if (ch === "@" || ch === "/") {
         if (i === 0 || /\s/.test(beforeCursor[i - 1])) {
-          atIndex = i;
+          triggerIndex = i;
+          triggerType = ch === "@" ? "mention" : "slash";
           break;
         }
       }
@@ -434,15 +563,18 @@ export class FileMention {
       }
     }
 
-    if (atIndex === -1) return null;
+    if (triggerIndex === -1 || !triggerType) return null;
 
-    const query = beforeCursor.slice(atIndex + 1);
+    const query = beforeCursor.slice(triggerIndex + 1);
     if (query.includes("\n")) return null;
 
-    this.mentionRange = this.computeMentionRange(atIndex, beforeCursor.length);
+    this.mentionRange = this.computeMentionRange(
+      triggerIndex,
+      beforeCursor.length,
+    );
     if (!this.mentionRange) return null;
 
-    return { query };
+    return { query, type: triggerType };
   }
 
   private computeMentionRange(
@@ -540,21 +672,25 @@ export class FileMention {
     const mentionMatch = this.findMentionTrigger(beforeCursor);
 
     if (mentionMatch) {
-      void this.refreshSuggestions(mentionMatch.query);
+      void this.refreshSuggestions(mentionMatch.type, mentionMatch.query);
       return;
     }
 
     this.hide();
   }
 
-  private async refreshSuggestions(query: string): Promise<void> {
+  private async refreshSuggestions(
+    type: SuggestionTriggerType,
+    query: string,
+  ): Promise<void> {
     const requestId = this.mentionQueryId + 1;
     this.mentionQueryId = requestId;
+    this.activeTriggerType = type;
 
     await this.loadItems();
     if (requestId !== this.mentionQueryId) return;
 
-    this.filterItems(query);
+    this.filterItems(type, query);
     this.show();
   }
 
@@ -588,9 +724,34 @@ export class FileMention {
   }
 
 
-  /** Filter items based on query */
-  private filterItems(query: string): void {
+  private filterItems(type: SuggestionTriggerType, query: string): void {
     const lowerQuery = query.toLowerCase();
+
+    if (type === "slash") {
+      let filteredSlash = this.slashItems;
+
+      if (query) {
+        filteredSlash = filteredSlash.filter((item) => {
+          const label = item.label.toLowerCase();
+          const value = item.value.toLowerCase();
+          const detail = item.detail.toLowerCase();
+          return (
+            label.includes(lowerQuery) ||
+            value.includes(lowerQuery) ||
+            detail.includes(lowerQuery)
+          );
+        });
+      }
+
+      this.filteredItems = filteredSlash.map((item) => ({
+        type: "slash",
+        item,
+      }));
+      this.selectedIndex = 0;
+      this.renderSuggestions();
+      return;
+    }
+
     const mentionedPaths = new Set(this.mentions.map((m) => m.path));
 
     let filteredFiles = this.fileItems.filter(
@@ -607,38 +768,15 @@ export class FileMention {
       filteredFiles = filteredFiles.filter((item) => !item.path.includes("/"));
     }
 
-    const mentionedSkills = new Set(this.skillMentions.map((m) => m.path));
-    let filteredSkills = this.skillItems.filter(
-      (item) => !mentionedSkills.has(item.path),
-    );
-
-    if (query) {
-      filteredSkills = filteredSkills.filter((item) => {
-        const name = item.name.toLowerCase();
-        const description = item.description.toLowerCase();
-        return name.includes(lowerQuery) || description.includes(lowerQuery);
-      });
-    }
-
     const fileMatches: UnifiedMentionItem[] = filteredFiles.map((item) => ({
       type: "file",
       item,
     }));
-    const skillMatches: UnifiedMentionItem[] = filteredSkills.map((item) => ({
-      type: "skill",
-      item,
-    }));
 
     if (query) {
-      const maxItems = 20;
-      const maxSkills = Math.min(skillMatches.length, 8);
-      const maxFiles = Math.max(maxItems - maxSkills, 0);
-      this.filteredItems = [
-        ...fileMatches.slice(0, maxFiles),
-        ...skillMatches.slice(0, maxSkills),
-      ];
+      this.filteredItems = fileMatches.slice(0, 20);
     } else {
-      this.filteredItems = [...fileMatches, ...skillMatches];
+      this.filteredItems = fileMatches;
     }
 
     this.selectedIndex = 0;
@@ -674,22 +812,34 @@ export class FileMention {
           ? option.item.isFolder
             ? "folder"
             : "file-text"
-          : "wand",
+          : option.type === "skill"
+            ? "wand"
+            : "terminal-square",
       );
       itemEl.appendChild(iconEl);
+
+      const bodyEl = document.createElement("div");
+      bodyEl.className = "opencodian-mention-body";
 
       const pathEl = document.createElement("span");
       pathEl.className = "opencodian-mention-path";
       pathEl.textContent =
-        option.type === "file" ? option.item.path : option.item.name;
-      itemEl.appendChild(pathEl);
+        option.type === "file"
+          ? option.item.path
+          : option.type === "skill"
+            ? option.item.name
+            : option.item.label;
+      bodyEl.appendChild(pathEl);
 
-      if (option.type === "skill") {
-        const scopeEl = document.createElement("span");
-        scopeEl.className = "opencodian-mention-scope";
-        scopeEl.textContent = option.item.scope;
-        itemEl.appendChild(scopeEl);
+      if (option.type !== "file") {
+        const metaEl = document.createElement("span");
+        metaEl.className = "opencodian-mention-meta";
+        metaEl.textContent =
+          option.type === "skill" ? option.item.scope : option.item.detail;
+        bodyEl.appendChild(metaEl);
       }
+
+      itemEl.appendChild(bodyEl);
 
       itemEl.addEventListener("mousedown", (e) => {
         e.preventDefault();
@@ -1040,7 +1190,46 @@ export class FileMention {
       return;
     }
 
+    if (item.type === "slash") {
+      this.insertSlashSuggestion(item.item);
+      return;
+    }
+
     this.insertSkillMention(item.item);
+  }
+
+  private insertSlashSuggestion(item: SlashSuggestionItem): void {
+    if (item.skillItem) {
+      this.insertSkillMention(item.skillItem);
+      return;
+    }
+
+    const text = item.insertText || `${item.value} `;
+
+    if (this.mentionRange) {
+      this.mentionRange.deleteContents();
+
+      const node = document.createTextNode(text);
+      this.mentionRange.insertNode(node);
+
+      const after = document.createRange();
+      after.setStartAfter(node);
+      after.collapse(true);
+
+      const sel = window.getSelection();
+      if (sel) {
+        sel.removeAllRanges();
+        sel.addRange(after);
+      }
+
+      this.mentionRange = null;
+      this.dispatchInputEvent();
+    } else {
+      this.insertPlainTextAtCursor(text);
+    }
+
+    this.hide();
+    this.inputEl.focus();
   }
 
   private insertFileMention(item: MentionItem): void {
@@ -1131,6 +1320,7 @@ export class FileMention {
     this.isOpen = false;
     this.suggestionsEl.style.display = "none";
     this.mentionRange = null;
+    this.activeTriggerType = null;
   }
 
   /** Open a file in Obsidian */
@@ -1398,4 +1588,3 @@ export class FileMention {
     }
   }
 }
-
