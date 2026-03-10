@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.2.0] - 2026-03-11
+
+### Added
+- Slash command suggestions in chat composer (`/` trigger) for discoverability of commands and skills
+- Suggestions sourced from `.claude/skills`, `.opencode/command`, and `.opencode/skills` directories
+- Keyboard and mouse navigation for slash suggestion dropdown
+
 ## [0.1.2] - 2026-02-10
 
 ### Added
@@ -13,8 +22,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Enhanced assistant message display with interactive link support
-
-[0.1.2]: https://github.com/DanielDaniel2201/opencodian/compare/0.1.1...0.1.2
 
 ## [0.1.1] - 2026-02-07
 
@@ -30,4 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed linting issues: replaced `require('fs')` with ES module import
 - Fixed unused variable warnings in OpenCodeService
 
-[0.1.1]: https://github.com/atman-33/opencodian/releases/tag/0.1.1
+[Unreleased]: https://github.com/DanielDaniel2201/opencodian/compare/0.2.0...HEAD
+[0.2.0]: https://github.com/DanielDaniel2201/opencodian/compare/0.1.2...0.2.0
+[0.1.2]: https://github.com/DanielDaniel2201/opencodian/compare/0.1.1...0.1.2
+[0.1.1]: https://github.com/DanielDaniel2201/opencodian/releases/tag/0.1.1
