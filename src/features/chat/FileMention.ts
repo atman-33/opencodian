@@ -18,10 +18,20 @@ export interface MentionItem {
   isFolder: boolean;
 }
 
+interface SlashSuggestionItem {
+  label: string;
+  value: string;
+  source: "claude-skill" | "opencode-command" | "opencode-skill";
+  detail: string;
+  insertText?: string;
+  skillItem?: SkillItem;
+}
+
 type UnifiedMentionItem =
   | { type: "file"; item: MentionItem }
   | { type: "skill"; item: SkillItem }
   | { type: "agent"; item: AgentInfo }
+  | { type: "slash"; item: SlashSuggestionItem }
   | {
       type: "category";
       item: {
@@ -45,6 +55,7 @@ export class FileMention {
   private fileItems: MentionItem[] = [];
   private skillItems: SkillItem[] = [];
   private agentItems: AgentInfo[] = [];
+  private slashItems: SlashSuggestionItem[] = [];
   private filteredItems: UnifiedMentionItem[] = [];
   private selectedIndex: number = 0;
   private mentionRange: Range | null = null;
@@ -132,6 +143,7 @@ export class FileMention {
     this.fileItems = items;
     this.skillItems = await this.loadSkillItems();
     this.agentItems = await this.loadAgentItems();
+    this.slashItems = await this.loadSlashItems();
   }
 
   private async loadAgentItems(): Promise<AgentInfo[]> {
@@ -176,6 +188,36 @@ export class FileMention {
     return skills;
   }
 
+  private async loadSlashItems(): Promise<SlashSuggestionItem[]> {
+    const [claudeSkills, opencodeCommands, opencodeSkills] = await Promise.all([
+      this.readSlashSkillFolders(".claude/skills", "claude-skill"),
+      this.readSlashCommands(),
+      this.readSlashSkillFolders(".opencode/skills", "opencode-skill"),
+    ]);
+
+    const items = [
+      ...claudeSkills,
+      ...opencodeCommands,
+      ...opencodeSkills,
+    ];
+    const unique = new Map<string, SlashSuggestionItem>();
+
+    for (const item of items) {
+      if (!unique.has(item.value)) {
+        unique.set(item.value, item);
+      }
+    }
+
+    return Array.from(unique.values()).sort((a, b) =>
+      a.value.localeCompare(b.value),
+    );
+  }
+
+  private getGlobalSkillsDir(): string | null {
+    const home = process.env.USERPROFILE || process.env.HOME;
+    if (!home) return null;
+    return path.join(home, ".claude", "skills");
+  }
   private async readProjectSkills(): Promise<SkillItem[]> {
     const skillsDirs = ProjectSkillDirs;
     const adapter: any = this.app.vault.adapter as any;
@@ -227,6 +269,91 @@ export class FileMention {
       return typeof content === "string" ? content : null;
     } catch {
       return null;
+    }
+  }
+
+  private getVaultAdapter(): {
+    exists(path: string): Promise<boolean>;
+    list(path: string): Promise<{ files: string[]; folders: string[] }>;
+  } {
+    return this.app.vault.adapter as {
+      exists(path: string): Promise<boolean>;
+      list(path: string): Promise<{ files: string[]; folders: string[] }>;
+    };
+  }
+
+  private getSlashSourceLabel(source: SlashSuggestionItem["source"]): string {
+    switch (source) {
+      case "claude-skill":
+        return ".claude/skills";
+      case "opencode-command":
+        return ".opencode/command";
+      case "opencode-skill":
+        return ".opencode/skills";
+    }
+  }
+
+  private async readSlashSkillFolders(
+    dir: string,
+    source: SlashSuggestionItem["source"],
+  ): Promise<SlashSuggestionItem[]> {
+    const adapter = this.getVaultAdapter();
+
+    try {
+      if (!(await adapter.exists(dir))) {
+        return [];
+      }
+
+      const listing = await adapter.list(dir);
+      return listing.folders
+        .map((folder) => folder.split("/").pop() || folder)
+        .filter((name) => name.length > 0 && !name.startsWith("."))
+        .map((name) => ({
+          label: `/${name}`,
+          value: `/${name}`,
+          source,
+          detail: this.getSlashSourceLabel(source),
+          skillItem: {
+            name,
+            description: "",
+            path: `${dir}/${name}/SKILL.md`,
+            scope: source === "claude-skill" ? "project" : "global",
+          },
+        }));
+    } catch {
+      return [];
+    }
+  }
+
+  private async readSlashCommands(): Promise<SlashSuggestionItem[]> {
+    const dir = ".opencode/command";
+    const adapter = this.getVaultAdapter();
+
+    try {
+      if (!(await adapter.exists(dir))) {
+        return [];
+      }
+
+      const listing = await adapter.list(dir);
+      return listing.files
+        .filter((file) => file.endsWith(".md"))
+        .filter((file) => {
+          const name = file.split("/").pop() || file;
+          return !name.startsWith(".");
+        })
+        .map((file) => {
+          const name = (file.split("/").pop() || file).replace(/\.md$/i, "");
+          return {
+          label: `/${name}`,
+          value: `/${name}`,
+          source: "opencode-command" as const,
+          detail: this.getSlashSourceLabel("opencode-command"),
+          insertText: `Follow instructions in ${file}. `,
+        };
+        })
+        .filter((item) => item.value.length > 1);
+    } catch {
+      return [];
     }
   }
 
@@ -440,14 +567,18 @@ export class FileMention {
   }
 
   /** Find the @query trigger right before cursor */
-  private findMentionTrigger(beforeCursor: string): { query: string } | null {
-    let atIndex = -1;
+  private findMentionTrigger(
+    beforeCursor: string,
+  ): { query: string; type: SuggestionTriggerType } | null {
+    let triggerIndex = -1;
+    let triggerType: SuggestionTriggerType | null = null;
 
     for (let i = beforeCursor.length - 1; i >= 0; i--) {
       const ch = beforeCursor[i];
-      if (ch === "@") {
+      if (ch === "@" || ch === "/") {
         if (i === 0 || /\s/.test(beforeCursor[i - 1])) {
-          atIndex = i;
+          triggerIndex = i;
+          triggerType = ch === "@" ? "mention" : "slash";
           break;
         }
       }
@@ -457,15 +588,18 @@ export class FileMention {
       }
     }
 
-    if (atIndex === -1) return null;
+    if (triggerIndex === -1 || !triggerType) return null;
 
-    const query = beforeCursor.slice(atIndex + 1);
+    const query = beforeCursor.slice(triggerIndex + 1);
     if (query.includes("\n")) return null;
 
-    this.mentionRange = this.computeMentionRange(atIndex, beforeCursor.length);
+    this.mentionRange = this.computeMentionRange(
+      triggerIndex,
+      beforeCursor.length,
+    );
     if (!this.mentionRange) return null;
 
-    return { query };
+    return { query, type: triggerType };
   }
 
   private computeMentionRange(
@@ -563,21 +697,25 @@ export class FileMention {
     const mentionMatch = this.findMentionTrigger(beforeCursor);
 
     if (mentionMatch) {
-      void this.refreshSuggestions(mentionMatch.query);
+      void this.refreshSuggestions(mentionMatch.type, mentionMatch.query);
       return;
     }
 
     this.hide();
   }
 
-  private async refreshSuggestions(query: string): Promise<void> {
+  private async refreshSuggestions(
+    type: SuggestionTriggerType,
+    query: string,
+  ): Promise<void> {
     const requestId = this.mentionQueryId + 1;
     this.mentionQueryId = requestId;
+    this.activeTriggerType = type;
 
     await this.loadItems();
     if (requestId !== this.mentionQueryId) return;
 
-    this.filterItems(query);
+    this.filterItems(type, query);
     this.show();
   }
 
@@ -611,9 +749,34 @@ export class FileMention {
   }
 
 
-  /** Filter items based on query */
-  private filterItems(query: string): void {
+  private filterItems(type: SuggestionTriggerType, query: string): void {
     const lowerQuery = query.toLowerCase();
+
+    if (type === "slash") {
+      let filteredSlash = this.slashItems;
+
+      if (query) {
+        filteredSlash = filteredSlash.filter((item) => {
+          const label = item.label.toLowerCase();
+          const value = item.value.toLowerCase();
+          const detail = item.detail.toLowerCase();
+          return (
+            label.includes(lowerQuery) ||
+            value.includes(lowerQuery) ||
+            detail.includes(lowerQuery)
+          );
+        });
+      }
+
+      this.filteredItems = filteredSlash.map((item) => ({
+        type: "slash",
+        item,
+      }));
+      this.selectedIndex = 0;
+      this.renderSuggestions();
+      return;
+    }
+
     const mentionedPaths = new Set(this.mentions.map((m) => m.path));
 
     const availableFiles = this.fileItems.filter(
@@ -700,7 +863,6 @@ export class FileMention {
       const description = (item.description ?? "").toLowerCase();
       return name.includes(lowerQuery) || description.includes(lowerQuery);
     });
-
     const fileMatches: UnifiedMentionItem[] = filteredFiles.map((item) => ({
       type: "file",
       item,
@@ -776,8 +938,13 @@ export class FileMention {
       if (option.type === "agent") {
         setIcon(iconEl, "bot");
       }
-
+      if (option.type === "slash") {
+        setIcon(iconEl, "terminal-square");
+      }
       itemEl.appendChild(iconEl);
+
+      const bodyEl = document.createElement("div");
+      bodyEl.className = "opencodian-mention-body";
 
       const pathEl = document.createElement("span");
       pathEl.className = "opencodian-mention-path";
@@ -797,13 +964,26 @@ export class FileMention {
         pathEl.textContent = option.item.name;
       }
 
-      itemEl.appendChild(pathEl);
+      if (option.type === "slash") {
+        pathEl.textContent = option.item.label;
+      }
 
-      if (option.type === "skill") {
-        const scopeEl = document.createElement("span");
-        scopeEl.className = "opencodian-mention-scope";
-        scopeEl.textContent = option.item.scope;
-        itemEl.appendChild(scopeEl);
+      bodyEl.appendChild(pathEl);
+
+      if (option.type !== "file") {
+        const metaEl = document.createElement("span");
+        metaEl.className = "opencodian-mention-meta";
+        metaEl.textContent =
+          option.type === "skill"
+            ? option.item.scope
+            : option.type === "agent"
+              ? (option.item.description ?? option.item.mode)
+              : option.type === "category"
+                ? ""
+                : option.item.detail;
+        if (metaEl.textContent) {
+          bodyEl.appendChild(metaEl);
+        }
       }
 
       if (option.type === "agent") {
@@ -819,6 +999,8 @@ export class FileMention {
         arrowEl.textContent = "›";
         itemEl.appendChild(arrowEl);
       }
+
+      itemEl.appendChild(bodyEl);
 
       itemEl.addEventListener("mousedown", (e) => {
         e.preventDefault();
@@ -1227,7 +1409,46 @@ export class FileMention {
       return;
     }
 
+    if (item.type === "slash") {
+      this.insertSlashSuggestion(item.item);
+      return;
+    }
+
     this.insertSkillMention(item.item);
+  }
+
+  private insertSlashSuggestion(item: SlashSuggestionItem): void {
+    if (item.skillItem) {
+      this.insertSkillMention(item.skillItem);
+      return;
+    }
+
+    const text = item.insertText || `${item.value} `;
+
+    if (this.mentionRange) {
+      this.mentionRange.deleteContents();
+
+      const node = document.createTextNode(text);
+      this.mentionRange.insertNode(node);
+
+      const after = document.createRange();
+      after.setStartAfter(node);
+      after.collapse(true);
+
+      const sel = window.getSelection();
+      if (sel) {
+        sel.removeAllRanges();
+        sel.addRange(after);
+      }
+
+      this.mentionRange = null;
+      this.dispatchInputEvent();
+    } else {
+      this.insertPlainTextAtCursor(text);
+    }
+
+    this.hide();
+    this.inputEl.focus();
   }
 
   private insertFileMention(item: MentionItem): void {
@@ -1659,4 +1880,3 @@ export class FileMention {
     }
   }
 }
-
