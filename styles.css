@@ -1215,6 +1215,13 @@
   height: 14px;
 }
 
+.opencodian-mention-body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
 .opencodian-mention-path {
   font-size: 13px;
   color: var(--text-normal);
@@ -1224,11 +1231,10 @@
   text-overflow: ellipsis;
 }
 
-.opencodian-mention-scope {
+.opencodian-mention-meta {
   font-size: 11px;
   color: var(--text-faint);
-  margin-left: auto;
-  padding-left: 8px;
+  margin-top: 2px;
 }
 
 .opencodian-mention-empty {
