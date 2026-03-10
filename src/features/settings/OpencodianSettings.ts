@@ -163,6 +163,7 @@ export class OpencodianSettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.debugLogging)
           .onChange(async (value) => {
             this.plugin.settings.debugLogging = value;
+            this.plugin.agentService.setDebugEnabled(value);
             await this.plugin.saveSettings();
           })
       );

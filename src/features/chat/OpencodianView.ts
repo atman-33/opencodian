@@ -2724,8 +2724,23 @@ export class OpencodianView extends ItemView {
 
     try {
       const response = await this.plugin.agentService.getProviders();
-      this.providers = processProviders(response);
+      const processed = processProviders(response);
+      this.providers = processed.providers;
       this.providersLoaded = true;
+
+      if (this.plugin.settings.debugLogging) {
+        const summary = processed.summaries.map((item) => ({
+          providerId: item.providerId,
+          providerName: item.providerName,
+          rawModelCount: item.rawModelCount,
+          processedModelCount: item.processedModelCount,
+          filteredOutModelIds: item.filteredOutModelIds,
+          hasClaudeSonnet46: item.rawModelIds.some((id) => id.includes("sonnet-4.6")),
+          hasGpt54: item.rawModelIds.some((id) => id.includes("gpt-5.4")),
+        }));
+
+        console.log("[OpencodianView] Provider processing summary:", summary);
+      }
     } catch (error) {
       console.error("[OpencodianView] Failed to load providers:", error);
       // On error, show empty state - user needs to configure providers
