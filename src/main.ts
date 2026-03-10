@@ -31,6 +31,7 @@ export default class OpencodianPlugin extends Plugin {
     // Initialize OpenCode service
     this.agentService = new OpenCodeService();
     this.agentService.setApp(this.app);
+    this.agentService.setDebugEnabled(this.settings.debugLogging);
 
     // Auto-detect opencode path if not set
     if (!this.settings.opencodePath) {
