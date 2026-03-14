@@ -6,6 +6,7 @@
  */
 
 import { TFolder, TFile, setIcon, type App } from "obsidian";
+import * as path from "path";
 
 import type { AgentInfo } from "../../core/types";
 import { ProjectSkillDirs, PseudoGlobalSkillDir } from "../../core/agent/SkillPolicy";
@@ -42,6 +43,8 @@ type UnifiedMentionItem =
 
 type MentionCategory = "root" | "files" | "skills" | "agents";
 
+type SuggestionTriggerType = "mention" | "slash";
+
 export class FileMention {
   private app: App;
   private inputEl: HTMLElement;
@@ -62,6 +65,7 @@ export class FileMention {
   private isOpen: boolean = false;
   private mentionQueryId: number = 0;
   private mentionCategory: MentionCategory = "root";
+  private activeTriggerType: SuggestionTriggerType | null = null;
 
   private mentions: MentionItem[] = [];
   private skillMentions: SkillItem[] = [];
@@ -1394,7 +1398,7 @@ export class FileMention {
   private selectItem(item: UnifiedMentionItem): void {
     if (item.type === "category") {
       this.mentionCategory = item.item.category;
-      this.filterItems("");
+      this.filterItems("mention", "");
       this.show();
       return;
     }
