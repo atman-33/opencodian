@@ -9,7 +9,7 @@
 import { createOpencodeClient } from "@opencode-ai/sdk/v2";
 import type { App } from "obsidian";
 
-import { spawn } from "child_process";
+import { exec, spawn } from "child_process";
 import * as http from "http";
 import * as readline from "readline";
 import * as fs from "fs";
@@ -309,9 +309,42 @@ export class OpenCodeService {
     const vaultDirectory = this.getVaultBasePath();
 
     try {
-      this.assertBundledRuntime();
-      const configDir = this.getPluginConfigDir();
-      console.log(`[OpenCodeService] Using OpenCode config dir: ${configDir}`);
+      const bundledBinaryPath = this.tryResolveBundledBinaryPath();
+      const pluginConfigDir = this.tryGetPluginConfigDir();
+      const bundledBinaryDetected = bundledBinaryPath
+        ? fs.existsSync(bundledBinaryPath)
+        : false;
+      const pluginConfigDetected = pluginConfigDir
+        ? fs.existsSync(pluginConfigDir)
+        : false;
+      const serverBinaryPath = bundledBinaryDetected
+        ? bundledBinaryPath
+        : await this.detectSystemOpencodePath();
+
+      if (!serverBinaryPath) {
+        const missingPath = bundledBinaryPath ?? "<unknown>";
+        throw new Error(
+          `Missing bundled OpenCode binary at ${missingPath} and no system OpenCode installation could be detected.`,
+        );
+      }
+
+      const usingBundledConfig = pluginConfigDetected && pluginConfigDir;
+      const env = usingBundledConfig
+        ? this.buildBundledServerEnv(pluginConfigDir)
+        : this.buildFallbackServerEnv();
+
+      if (usingBundledConfig) {
+        console.log(`[OpenCodeService] Using plugin OpenCode config dir: ${pluginConfigDir}`);
+      } else {
+        console.warn(
+          "[OpenCodeService] Plugin-local .opencode config not found. Falling back to OpenCode's default config discovery.",
+        );
+      }
+
+      console.log(
+        `[OpenCodeService] Using ${bundledBinaryDetected ? "bundled" : "system"} OpenCode binary: ${serverBinaryPath}`,
+      );
+
       if (this.serverPort === 4096) {
         console.warn(
           "[OpenCodeService] Port 4096 is reserved for default OpenCode installations. Consider using 4097.",
@@ -325,9 +358,11 @@ export class OpenCodeService {
         );
       }
       console.log(
-        `[OpenCodeService] Starting bundled OpenCode server on port ${resolvedPort.port}...`
+        `[OpenCodeService] Starting OpenCode server on port ${resolvedPort.port}...`
       );
       const server = await this.startOpencodeServer({
+        binaryPath: serverBinaryPath,
+        env,
         hostname: "127.0.0.1",
         port: resolvedPort.port,
         timeoutMs: 15000,
@@ -365,6 +400,8 @@ export class OpenCodeService {
   }
 
   private async startOpencodeServer(options: {
+    binaryPath: string;
+    env: Record<string, string>;
     hostname: string;
     port: number;
     timeoutMs: number;
@@ -376,16 +413,19 @@ export class OpenCodeService {
       `--port=${options.port}`,
     ];
 
-    const binaryPath = this.resolveBundledBinaryPath();
-    if (!fs.existsSync(binaryPath)) {
+    if (!fs.existsSync(options.binaryPath)) {
       throw new Error(
-        `Bundled OpenCode binary not found at ${binaryPath}. Please reinstall the plugin.`,
+        `OpenCode binary not found at ${options.binaryPath}.`,
       );
     }
-    const env = this.buildServerEnv();
-    const proc = spawn(binaryPath, args, {
+
+    const useShell = process.platform === "win32"
+      && /\.(cmd|bat|ps1)$/i.test(options.binaryPath);
+
+    const proc = spawn(options.binaryPath, args, {
       cwd: options.cwd,
-      env,
+      env: options.env,
+      shell: useShell,
     });
 
     const url = `http://${options.hostname}:${options.port}`;
@@ -397,16 +437,6 @@ export class OpenCodeService {
         proc.kill();
       },
     };
-  }
-
-  private assertBundledRuntime(): void {
-    const binaryPath = this.resolveBundledBinaryPath();
-    if (!fs.existsSync(binaryPath)) {
-      throw new Error(
-        `Missing bundled OpenCode binary at ${binaryPath}. Please see README prerequisites.`,
-      );
-    }
-    this.assertConfigDirExists();
   }
 
   private resolveBundledBinaryPath(): string {
@@ -428,6 +458,14 @@ export class OpenCodeService {
     throw new Error(`Unsupported platform: ${platform}`);
   }
 
+  private tryResolveBundledBinaryPath(): string | null {
+    try {
+      return this.resolveBundledBinaryPath();
+    } catch {
+      return null;
+    }
+  }
+
   private getPluginConfigDir(): string {
     const basePath = this.getVaultBasePath();
     if (!basePath) {
@@ -440,6 +478,14 @@ export class OpenCodeService {
       "opencodian",
       ".opencode",
     );
+  }
+
+  private tryGetPluginConfigDir(): string | null {
+    try {
+      return this.getPluginConfigDir();
+    } catch {
+      return null;
+    }
   }
 
   private assertConfigDirExists(): void {
@@ -462,41 +508,24 @@ export class OpenCodeService {
       };
     }
 
-    const configDir = path.join(
-      basePath,
-      ".obsidian",
-      "plugins",
-      "opencodian",
-      ".opencode",
-    );
-    const binDir = path.join(
-      basePath,
-      ".obsidian",
-      "plugins",
-      "opencodian",
-      "bin",
-    );
-    const platform = process.platform;
-    const binaryPath =
-      platform === "win32"
-        ? path.join(binDir, "win", "opencode.exe")
-        : platform === "darwin"
-          ? path.join(binDir, "mac", "opencode")
-          : platform === "linux"
-            ? path.join(binDir, "linux", "opencode")
-            : null;
+    const bundledBinaryPath = this.tryResolveBundledBinaryPath();
+    const pluginConfigDir = this.tryGetPluginConfigDir();
+    const detectedBinaryPath = bundledBinaryPath && fs.existsSync(bundledBinaryPath)
+      ? bundledBinaryPath
+      : this.detectSystemOpencodePathSync();
+    const detectedConfigDir = pluginConfigDir && fs.existsSync(pluginConfigDir)
+      ? pluginConfigDir
+      : this.detectDefaultConfigDirSync();
 
     return {
-      binaryDetected: binaryPath ? fs.existsSync(binaryPath) : false,
-      configDetected: fs.existsSync(configDir),
-      binaryPath,
-      configDir,
+      binaryDetected: Boolean(detectedBinaryPath),
+      configDetected: Boolean(detectedConfigDir),
+      binaryPath: detectedBinaryPath,
+      configDir: detectedConfigDir,
     };
   }
 
-  private buildServerEnv(): Record<string, string> {
-    this.assertConfigDirExists();
-    const configDir = this.getPluginConfigDir();
+  private buildBundledServerEnv(configDir: string): Record<string, string> {
     const pluginRoot = path.dirname(configDir);
     const xdgConfigHome = path.join(configDir, "xdg");
     const baseEnv: Record<string, string> = {};
@@ -541,6 +570,113 @@ export class OpenCodeService {
     }
 
     return env;
+  }
+
+  private buildFallbackServerEnv(): Record<string, string> {
+    const env: Record<string, string> = {};
+    for (const [key, value] of Object.entries(process.env)) {
+      if (typeof value === "string") {
+        env[key] = value;
+      }
+    }
+
+    const customEnv = this.parseEnvironmentVariables(this.environmentVariables);
+    Object.assign(env, customEnv);
+
+    if (this.debugEnabled) {
+      env.OPENCODE_LOG_LEVEL = "debug";
+    }
+
+    return env;
+  }
+
+  private getSystemOpencodeCandidates(): string[] {
+    if (process.platform === "win32") {
+      return [
+        process.env.APPDATA ? path.join(process.env.APPDATA, "npm", "opencode.cmd") : "",
+        process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, "Programs", "opencode", "opencode.exe") : "",
+        process.env.USERPROFILE ? path.join(process.env.USERPROFILE, "AppData", "Roaming", "npm", "opencode.cmd") : "",
+        "C:\\Program Files\\nodejs\\opencode.cmd",
+        "C:\\Program Files\\opencode\\opencode.exe",
+      ].filter(Boolean);
+    }
+
+    return [
+      process.env.HOME ? path.join(process.env.HOME, ".npm-global", "bin", "opencode") : "",
+      process.env.HOME ? path.join(process.env.HOME, ".local", "bin", "opencode") : "",
+      "/usr/local/bin/opencode",
+      "/usr/bin/opencode",
+      "/opt/homebrew/bin/opencode",
+    ].filter(Boolean);
+  }
+
+  private detectSystemOpencodePathSync(): string | null {
+    for (const candidate of this.getSystemOpencodeCandidates()) {
+      if (candidate && fs.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+    return null;
+  }
+
+  private async detectSystemOpencodePath(): Promise<string | null> {
+    const directMatch = this.detectSystemOpencodePathSync();
+    if (directMatch) {
+      return directMatch;
+    }
+
+    const commands = process.platform === "win32"
+      ? ["where opencode", "cmd /c where opencode"]
+      : ["which opencode", "command -v opencode"];
+
+    for (const command of commands) {
+      try {
+        const detected = await new Promise<string>((resolve, reject) => {
+          exec(command, { timeout: 5000 }, (error, stdout) => {
+            if (error) {
+              reject(error);
+              return;
+            }
+            resolve(stdout.trim());
+          });
+        });
+
+        const firstLine = detected.split(/\r?\n/)[0]?.trim();
+        if (firstLine) {
+          return firstLine;
+        }
+      } catch {
+        // ignore and continue
+      }
+    }
+
+    return null;
+  }
+
+  private detectDefaultConfigDirSync(): string | null {
+    const explicit = process.env.OPENCODE_CONFIG_DIR;
+    if (explicit && this.hasOpenCodeConfigFile(explicit)) {
+      return explicit;
+    }
+
+    const candidates = [
+      process.env.HOME ? path.join(process.env.HOME, ".config", "opencode") : "",
+      process.env.USERPROFILE ? path.join(process.env.USERPROFILE, ".config", "opencode") : "",
+      process.env.APPDATA ? path.join(process.env.APPDATA, "opencode") : "",
+    ].filter(Boolean);
+
+    for (const candidate of candidates) {
+      if (this.hasOpenCodeConfigFile(candidate)) {
+        return candidate;
+      }
+    }
+
+    return null;
+  }
+
+  private hasOpenCodeConfigFile(configDir: string): boolean {
+    return fs.existsSync(path.join(configDir, "opencode.json"))
+      || fs.existsSync(path.join(configDir, "opencode.jsonc"));
   }
 
   private parseEnvironmentVariables(input: string): Record<string, string> {

@@ -150,7 +150,7 @@ export class OpencodianSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("OpenCode config location")
-      .setDesc("Copy your opencode.json into .obsidian/plugins/opencodian/.opencode");
+      .setDesc("Prefer .obsidian/plugins/opencodian/.opencode. If missing, Opencodian falls back to your normal OpenCode config.");
 
     // Debug logging
     new Setting(containerEl)
@@ -170,7 +170,7 @@ export class OpencodianSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("OpenCode server port")
-      .setDesc("Port for the bundled OpenCode server. Default is 4097.")
+      .setDesc("Port for the OpenCode server. Default is 4097.")
       .addText((text) => {
         text
           .setPlaceholder("4097")
