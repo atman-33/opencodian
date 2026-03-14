@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-03-14
+
+### Added
+- Bundled OpenCode runtime support with plugin-local config handling and runtime status surfaced in settings
+- Agent-aware `@` mentions and richer request parts for chat prompts
+- Two-level mention picker improvements for files, skills, and agents with fuzzy matching
+
+### Changed
+- Improved provider/model loading with clearer summaries and debug logging
+- Updated settings guidance to explain bundled runtime behavior and config fallback behavior
+- Refined mention and composer UX, including slash-command discovery in the chat input
+
+### Fixed
+- Prompt/request handling edge cases in `OpenCodeService`, including null-body responses and timeout/error propagation
+- Windows startup fallback when auto-detected OpenCode is a `.cmd` launcher
+- Startup fallback to system OpenCode when bundled runtime or plugin-local config is missing
+
 ## [0.2.0] - 2026-03-11
 
 ### Added
@@ -37,7 +54,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed linting issues: replaced `require('fs')` with ES module import
 - Fixed unused variable warnings in OpenCodeService
 
-[Unreleased]: https://github.com/DanielDaniel2201/opencodian/compare/0.2.0...HEAD
+[Unreleased]: https://github.com/DanielDaniel2201/opencodian/compare/0.3.0...HEAD
+[0.3.0]: https://github.com/DanielDaniel2201/opencodian/compare/0.2.0...0.3.0
 [0.2.0]: https://github.com/DanielDaniel2201/opencodian/compare/0.1.2...0.2.0
 [0.1.2]: https://github.com/DanielDaniel2201/opencodian/compare/0.1.1...0.1.2
 [0.1.1]: https://github.com/DanielDaniel2201/opencodian/releases/tag/0.1.1
